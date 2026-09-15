@@ -13,27 +13,38 @@ permissions:
 jobs:
   ping-streams:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - name: Descargar el repositorio (necesario para poder hacer commit despues)
         uses: actions/checkout@v4
 
-      - name: Conectar unos segundos a cada radio (mantiene el stream vivo)
+      - name: Mantener conexion abierta en ambas radios (~9 de cada 10 minutos)
         run: |
           set -e
+
+          # Segundos que se mantiene cada conexion abierta por corrida.
+          # 540s = 9 minutos, dejando ~1 minuto de margen antes de que
+          # arranque la siguiente corrida programada cada 10 minutos.
+          HOLD_SECONDS=540
 
           STATIONS=(
             "https://eu8.fastcast4u.com/proxy/carloshernandez2?mp=/1"
             "http://51.255.235.165:3488/stream?type=http&nocache=1"
           )
 
+          PIDS=()
           for URL in "${STATIONS[@]}"; do
-            echo "Conectando a: $URL"
-            # timeout 15  -> corta la conexión a los 15s (solo queremos
-            #                que cuente como "oyente conectado" un rato)
-            # -s          -> modo silencioso
-            # -o /dev/null-> descarta el audio descargado, no lo guarda
-            timeout 15 curl -s -A "Mozilla/5.0 (KeepAliveBot/1.0)" -o /dev/null "$URL" || \
-              echo "Aviso: no se pudo conectar a $URL (puede estar caída temporalmente)"
+            echo "Abriendo conexion a: $URL (hasta ${HOLD_SECONDS}s)"
+            (
+              timeout "$HOLD_SECONDS" curl -s -A "Mozilla/5.0 (KeepAliveBot/1.0)" -o /dev/null "$URL" \
+                || echo "Aviso: conexion a $URL termino antes de tiempo (puede estar caida temporalmente)"
+            ) &
+            PIDS+=($!)
+          done
+
+          # Espera a que ambas conexiones terminen (o lleguen al timeout)
+          for PID in "${PIDS[@]}"; do
+            wait "$PID"
           done
 
           echo "Keep-alive de streams completado."
